@@ -24,7 +24,7 @@ Colours come from the CSS tokens `--kora-mark-ring` and `--kora-mark-form` (set 
 
 ## Current status
 
-The shop UI, catalog, cart, Google sign-in, account-scoped order history, API, Paystack hosted checkout, and Mailgun receipt integration are implemented. Paystack is restricted to TEST secret keys and its external setup is currently on hold; because checkout initializes Paystack, checkout cannot complete until a valid test key is configured. The Mailgun sender uses the EU API endpoint. Catalog prices and product photos are illustrative demo content, not a real bakery's live menu. External Supabase/Google Cloud/Paystack/Mailgun configuration is human-led. Never put the Paystack secret key, Mailgun key, or database password in frontend code.
+The shop UI, catalog, cart, Google sign-in, account-scoped order history, API, Paystack hosted checkout, and Mailgun receipt integration are implemented. Paystack hosted checkout has been verified in TEST mode and is no longer on hold. The backend accepts only TEST secret keys; live payment processing is not enabled. The Mailgun sender uses the EU API endpoint. Catalog prices and product photos are illustrative demo content, not a real bakery's live menu. External Supabase/Google Cloud/Paystack/Mailgun configuration is human-led. Never put the Paystack secret key, Mailgun key, or database password in frontend code.
 
 ## Run locally
 
@@ -84,7 +84,7 @@ Supabase's current guide: [Sign in with Google](https://supabase.com/docs/guides
 1. Create a Mailgun account and use an EU-region sending domain. The backend currently posts to `https://api.eu.mailgun.net/v3/{domain}/messages`; the domain must belong to that region.
 2. Complete the DNS verification steps Mailgun shows for the domain. For a sandbox domain, authorize the recipient address in Mailgun.
 3. Set `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL` in the backend environment. The sender address must be valid for the configured Mailgun domain.
-4. The automated tests mock Mailgun and never send email. For a manual receipt test, use an address you control and complete a successful verified test payment first. Paystack setup is currently on hold, so this end-to-end receipt test is blocked until the test payment credentials are configured.
+4. The automated tests mock Mailgun and never send email. For a manual receipt test, use an address you control and complete a successful verified TEST payment first. The Paystack TEST checkout flow has been verified; confirm the Mailgun receipt in the EU account's delivery logs.
 
 See Mailgun's [message sending API](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/messages/post-v3--domain-name--messages).
 
@@ -92,9 +92,9 @@ See Mailgun's [message sending API](https://documentation.mailgun.com/docs/mailg
 
 1. Push this repository to GitHub and create a Render Blueprint from `render.yaml`.
 2. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL` as Render environment variables. Use a Postgres connection string for durable production storage. Mailgun values must correspond to the EU sending domain.
-3. The current checkout code also requires `PAYSTACK_SECRET_KEY` and `PAYSTACK_CALLBACK_URL` to initialize payments. Paystack setup is on hold, so production checkout is not ready until the payment mode is decided and configured; do not use a live key because the backend accepts TEST keys only.
+3. The current checkout code requires `PAYSTACK_SECRET_KEY` and `PAYSTACK_CALLBACK_URL` to initialize payments. For the verified demo flow, configure a Paystack TEST key and the deployed app callback. The backend rejects live keys, so real live payments require a separately reviewed implementation before launch.
 4. Use the deployed Render URL for Supabase Site URL and allowed redirect URLs, and add it to Google Cloud authorized JavaScript origins.
-5. Apply both SQL migrations in order before the first backend startup. Deploy, then verify Google sign-in, account-scoped order history, and a successful payment/receipt flow after the chosen payment configuration is ready.
+5. Apply both SQL migrations in order before the first backend startup. Deploy, then verify Google sign-in, account-scoped order history, and a successful TEST payment with its Mailgun receipt.
 
 Render Free services sleep after inactivity and use an ephemeral filesystem. This app uses Supabase Postgres for orders, so orders are not stored on Render's filesystem. Supabase Free projects may pause after a week of low activity; resume them in Supabase if that happens. Check [Render Free limits](https://render.com/docs/free) and [Supabase Free project pausing](https://supabase.com/docs/guides/platform/free-project-pausing).
 

@@ -43,4 +43,4 @@ Build the Kora Bakes bakery shop described in `PRD.md`. The required integration
 
 ## Human-only integration setup
 
-The human owner must create and configure Supabase/Google Cloud and Mailgun accounts, copy credentials into Render environment variables, set OAuth redirect URLs, and verify the EU sending domain. Paystack setup is currently on hold; checkout must not be described as production-ready until its payment configuration is decided and tested. AI agents may generate detailed steps and code but must not claim external integrations are live until production values are configured and tested.
+The human owner must create and configure Supabase/Google Cloud and Mailgun accounts, copy credentials into Render environment variables, set OAuth redirect URLs, and verify the EU sending domain. Paystack hosted checkout is verified in TEST mode. The backend rejects live Paystack keys; do not claim live payment processing is supported until the code and deployment configuration are explicitly updated and tested. AI agents may generate detailed steps and code but must not claim external integrations are live until production values are configured and tested.
