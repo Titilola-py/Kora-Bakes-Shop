@@ -6,7 +6,7 @@ from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, Uuid, 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
-DEFAULT_DB = Path(__file__).resolve().parents[1] / "crumb_and_bloom.db"
+DEFAULT_DB = Path(__file__).resolve().parents[1] / "kora-bakes.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_DB.as_posix()}")
 # Supabase provides postgresql:// URLs, while this project installs psycopg v3.
 # Make the driver explicit so SQLAlchemy does not look for psycopg2.

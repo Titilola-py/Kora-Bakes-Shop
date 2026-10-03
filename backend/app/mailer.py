@@ -39,7 +39,7 @@ def build_confirmation(order: dict[str, object]) -> tuple[str, str]:
     body = f"""<!doctype html><html><body style="margin:0;background:#f7f3ec;font-family:Arial,sans-serif;color:#2c352b">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:32px 12px"><tr><td align="center">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fffdf9;border-radius:20px;padding:32px">
-      <tr><td><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#a46c49">Crumb &amp; Bloom · Lagos</div>
+      <tr><td><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#a46c49">Kora Bakes · Lagos</div>
       <h1 style="font-family:Georgia,serif;font-size:30px;font-weight:500;margin:18px 0 8px">Your order is in the oven.</h1>
       <p style="color:#64675d;margin:0 0 24px">Hi {customer}, we’ve saved your pickup order.</p>
       <div style="background:#f4eee4;border-radius:12px;padding:16px;margin-bottom:24px"><strong>Order {order_number}</strong><br>
@@ -65,7 +65,7 @@ async def send_confirmation(recipient: str, order: dict[str, object]) -> str:
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
             response = await client.post(
-                f"https://api.mailgun.net/v3/{domain}/messages",
+                f"https://api.eu.mailgun.net/v3/{domain}/messages",
                 auth=("api", api_key),
                 data={
                     "from": sender,
