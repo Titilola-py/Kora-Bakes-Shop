@@ -24,13 +24,13 @@ Colours come from the CSS tokens `--kora-mark-ring` and `--kora-mark-form` (set 
 
 ## Current status
 
-The shop UI, catalog, cart, pickup checkout, account-scoped order history, API, and integration code are implemented. Paystack is restricted to TEST secret keys; configure a Paystack test key before trying hosted checkout. Catalog prices and product photos are illustrative demo content, not a real bakery's live menu. External Supabase/Google Cloud/Paystack/Mailgun configuration is human-led. Never put the Paystack secret key, Mailgun key, or database password in frontend code.
+The shop UI, catalog, cart, Google sign-in, account-scoped order history, API, Paystack hosted checkout, and Mailgun receipt integration are implemented. Paystack is restricted to TEST secret keys and its external setup is currently on hold; because checkout initializes Paystack, checkout cannot complete until a valid test key is configured. The Mailgun sender uses the EU API endpoint. Catalog prices and product photos are illustrative demo content, not a real bakery's live menu. External Supabase/Google Cloud/Paystack/Mailgun configuration is human-led. Never put the Paystack secret key, Mailgun key, or database password in frontend code.
 
 ## Run locally
 
-1. Copy `backend/.env.example` to `backend/.env` and set the Supabase URL, public anon key, a Postgres `DATABASE_URL`, a Paystack **Test Secret Key**, and a callback URL matching the frontend origin. SQLite can be used locally for API development, but it does not provide the production persistence guarantee.
+1. Create `backend/.env` (there is currently no committed backend env template) and set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `APP_ORIGIN`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL`. For the existing checkout flow, also set a Paystack **Test Secret Key** as `PAYSTACK_SECRET_KEY` and `PAYSTACK_CALLBACK_URL`; without it, checkout stops at payment initialization. SQLite can be used locally for API development, but it does not provide the production persistence guarantee.
 2. Configure Google as a Supabase Auth provider. Add the local app URL `http://localhost:5173` to Supabase's allowed redirect URLs. See [Google OAuth setup](#google-oauth-setup).
-3. Configure Mailgun values in `backend/.env` to send confirmation email. The email is sent only after the backend verifies a successful Paystack transaction. Without Mailgun values, the paid order is still saved and its email status reports that email is not configured.
+3. Configure the EU Mailgun values in `backend/.env` to send confirmation email. The email is sent only after the backend verifies a successful Paystack transaction. Without Mailgun values, the paid order is still saved and its email status reports that email is not configured.
 4. Start the API and frontend in two terminals:
 
 ```powershell
@@ -81,19 +81,20 @@ Supabase's current guide: [Sign in with Google](https://supabase.com/docs/guides
 
 ## Mailgun setup
 
-1. Create a Mailgun account and add a sending domain.
-2. Complete the DNS verification steps Mailgun shows for that domain.
-3. Create/copy an API key and set `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL` on the backend/Render service.
-4. Test checkout with a recipient address you control, then confirm the message arrives and renders in HTML and plain text.
+1. Create a Mailgun account and use an EU-region sending domain. The backend currently posts to `https://api.eu.mailgun.net/v3/{domain}/messages`; the domain must belong to that region.
+2. Complete the DNS verification steps Mailgun shows for the domain. For a sandbox domain, authorize the recipient address in Mailgun.
+3. Set `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL` in the backend environment. The sender address must be valid for the configured Mailgun domain.
+4. The automated tests mock Mailgun and never send email. For a manual receipt test, use an address you control and complete a successful verified test payment first. Paystack setup is currently on hold, so this end-to-end receipt test is blocked until the test payment credentials are configured.
 
 See Mailgun's [message sending API](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/messages/post-v3--domain-name--messages).
 
 ## Deploy to Render
 
 1. Push this repository to GitHub and create a Render Blueprint from `render.yaml`.
-2. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM_EMAIL`, `PAYSTACK_SECRET_KEY`, and `PAYSTACK_CALLBACK_URL` as Render secrets/environment variables. Use a Paystack Test Secret Key (`sk_test_...`) and the deployed app origin for the callback.
-3. Use the deployed Render URL for Supabase Site URL and allowed redirect URLs, and add it to Google Cloud authorized JavaScript origins.
-4. Deploy, then test Google sign-in, place a pickup order, verify it appears in order history after signing out/in, and receive the Mailgun email.
+2. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL` as Render environment variables. Use a Postgres connection string for durable production storage. Mailgun values must correspond to the EU sending domain.
+3. The current checkout code also requires `PAYSTACK_SECRET_KEY` and `PAYSTACK_CALLBACK_URL` to initialize payments. Paystack setup is on hold, so production checkout is not ready until the payment mode is decided and configured; do not use a live key because the backend accepts TEST keys only.
+4. Use the deployed Render URL for Supabase Site URL and allowed redirect URLs, and add it to Google Cloud authorized JavaScript origins.
+5. Apply both SQL migrations in order before the first backend startup. Deploy, then verify Google sign-in, account-scoped order history, and a successful payment/receipt flow after the chosen payment configuration is ready.
 
 Render Free services sleep after inactivity and use an ephemeral filesystem. This app uses Supabase Postgres for orders, so orders are not stored on Render's filesystem. Supabase Free projects may pause after a week of low activity; resume them in Supabase if that happens. Check [Render Free limits](https://render.com/docs/free) and [Supabase Free project pausing](https://supabase.com/docs/guides/platform/free-project-pausing).
 
