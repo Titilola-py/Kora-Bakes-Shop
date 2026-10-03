@@ -1,0 +1,1 @@
+"""Kora Bakes shop API."""
