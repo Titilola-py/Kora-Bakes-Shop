@@ -28,7 +28,7 @@ The shop UI, catalog, cart, Google sign-in, account-scoped order history, API, P
 
 ## Run locally
 
-1. Create `backend/.env` (there is currently no committed backend env template) and set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `APP_ORIGIN`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL`. For the existing checkout flow, also set a Paystack **Test Secret Key** as `PAYSTACK_SECRET_KEY` and `PAYSTACK_CALLBACK_URL`; without it, checkout stops at payment initialization. SQLite can be used locally for API development, but it does not provide the production persistence guarantee.
+1. Create `backend/.env` (there is currently no committed backend env template) and set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `APP_ORIGIN`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL`. For the existing checkout flow, also set a Paystack **Test Secret Key** as `PAYSTACK_SECRET_KEY`; without it, checkout stops at payment initialization. `APP_ORIGIN` is the shop URL used for Paystack's return callback (local development: `http://localhost:5173`). SQLite can be used locally for API development, but it does not provide the production persistence guarantee.
 2. Configure Google as a Supabase Auth provider. Add the local app URL `http://localhost:5173` to Supabase's allowed redirect URLs. See [Google OAuth setup](#google-oauth-setup).
 3. Configure the EU Mailgun values in `backend/.env` to send confirmation email. The email is sent only after the backend verifies a successful Paystack transaction. Without Mailgun values, the paid order is still saved and its email status reports that email is not configured.
 4. Start the API and frontend in two terminals:
@@ -52,8 +52,8 @@ Open `http://localhost:5173`.
 ## Paystack TEST setup
 
 1. Use a Paystack account in **Test Mode** and copy its Test Secret Key into `PAYSTACK_SECRET_KEY` in `backend/.env`. The backend rejects keys that do not start with `sk_test_`; never add the key to frontend variables or source files.
-2. Set `PAYSTACK_CALLBACK_URL` to the frontend origin, including the trailing slash, such as `http://localhost:5173/`. If Vite chooses another port, update this value to match.
-3. For deployed testing, set the callback URL to the public app origin and configure Paystack's test webhook URL as `https://<your-app-host>/api/payments/webhook`.
+2. Set `APP_ORIGIN` to the frontend origin, such as `http://localhost:5173` locally. The backend uses this value to send Paystack back to the shop root; do not set a separate `PAYSTACK_CALLBACK_URL`.
+3. For deployed testing, Render configures `APP_ORIGIN` as `https://kora-bakes.onrender.com`. Configure Paystack's test webhook URL as `https://kora-bakes.onrender.com/api/payments/webhook`.
 4. Apply `supabase/migrations/20261003000000_add_paystack_payments.sql` to the existing Supabase database before deploying the backend. It adds payment state and payment-attempt records. Local SQLite adds its missing payment columns without deleting existing orders.
 5. Submit a pickup order. Paystack hosts the payment page; the backend initializes with the saved order total, verifies the returned reference and transaction details, and sends the existing email only after verification. Use Paystack's official test payment details in Test Mode.
 
@@ -91,8 +91,8 @@ See Mailgun's [message sending API](https://documentation.mailgun.com/docs/mailg
 ## Deploy to Render
 
 1. Push this repository to GitHub and create a Render Blueprint from `render.yaml`.
-2. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, and `MAILGUN_FROM_EMAIL` as Render environment variables. Use a Postgres connection string for durable production storage. Mailgun values must correspond to the EU sending domain.
-3. The current checkout code requires `PAYSTACK_SECRET_KEY` and `PAYSTACK_CALLBACK_URL` to initialize payments. For the verified demo flow, configure a Paystack TEST key and the deployed app callback. The backend rejects live keys, so real live payments require a separately reviewed implementation before launch.
+2. Set `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM_EMAIL`, and `PAYSTACK_SECRET_KEY` as Render environment variables. The Blueprint sets `APP_ORIGIN` to `https://kora-bakes.onrender.com`. Use a Postgres connection string for durable production storage; Mailgun values must correspond to the EU sending domain.
+3. Configure Paystack's test webhook URL as `https://kora-bakes.onrender.com/api/payments/webhook`. The backend rejects live keys, so real live payments require a separately reviewed implementation before launch. If `PAYSTACK_CALLBACK_URL` is set on an existing Render service, remove it; the backend derives the callback from `APP_ORIGIN`.
 4. Use the deployed Render URL for Supabase Site URL and allowed redirect URLs, and add it to Google Cloud authorized JavaScript origins.
 5. Apply both SQL migrations in order before the first backend startup. Deploy, then verify Google sign-in, account-scoped order history, and a successful TEST payment with its Mailgun receipt.
 

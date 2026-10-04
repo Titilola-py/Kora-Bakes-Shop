@@ -8,6 +8,8 @@ services:
     dockerContext: .
     healthCheckPath: /api/health
     envVars:
+      - key: APP_ORIGIN
+        value: https://kora-bakes.onrender.com
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL
@@ -21,6 +23,4 @@ services:
       - key: MAILGUN_FROM_EMAIL
         sync: false
       - key: PAYSTACK_SECRET_KEY
-        sync: false
-      - key: PAYSTACK_CALLBACK_URL
         sync: false

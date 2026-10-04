@@ -301,7 +301,6 @@ function App() {
         window.localStorage.removeItem("kora-cart");
         window.localStorage.removeItem("kora-pending-payment-order");
       }
-      window.history.replaceState({}, "", window.location.pathname);
     } catch (error) {
       setPaymentError(error.message || "We could not verify the payment yet.");
     } finally {
@@ -378,6 +377,10 @@ function App() {
   };
 
   const goShop = () => {
+    const callbackUrl = new URL(window.location.href);
+    callbackUrl.searchParams.delete("reference");
+    callbackUrl.searchParams.delete("trxref");
+    window.history.replaceState({}, "", `${callbackUrl.pathname}${callbackUrl.search}${callbackUrl.hash}`);
     setView("shop");
     setAuthOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -542,15 +545,15 @@ function App() {
       {view === "payment-result" && (
         <main className="page-wrap success-page">
           {paymentResult?.order?.payment_status === "paid" ? <div className="success-mark"><Check size={28} /></div> : <div className="success-mark"><Clock3 size={26} /></div>}
-          <div className="eyebrow"><span /> {paymentResult?.order?.payment_status === "paid" ? "PAYMENT VERIFIED" : "PAYMENT STATUS"}</div>
-          <h1>{paymentResult?.order?.payment_status === "paid" ? <>Something good<br /><em>is on its way.</em></> : <>Your order is<br /><em>still saved.</em></>}</h1>
+          <div className="eyebrow"><span /> {paymentResult?.order?.payment_status === "paid" ? "PAYMENT SUCCESSFUL" : "PAYMENT STATUS"}</div>
+          <h1>{paymentResult?.order?.payment_status === "paid" ? <>Order<br /><em>confirmed.</em></> : <>Your order is<br /><em>still saved.</em></>}</h1>
           <p className="success-lead">{paymentChecking ? "Checking your payment with Paystack…" : paymentResult?.order?.payment_status === "paid" ? `Thanks, ${paymentResult.order.customer_name.split(" ")[0]}. Your pickup order is confirmed.` : paymentResult?.attempt_status === "pending" ? "Payment is not confirmed yet. You can check again or return to Paystack." : "Payment was not completed. Your bag is still here, and you can try again."}</p>
           {paymentError && <div className="notice error-notice" role="alert">{paymentError}</div>}
-          {paymentResult?.order && <div className="success-card"><div><span>ORDER NUMBER</span><strong>{paymentResult.order.order_number}</strong></div><div><span>PICKUP DATE</span><strong>{new Date(`${paymentResult.order.pickup_date}T12:00:00`).toLocaleDateString("en-NG", { weekday: "long", day: "numeric", month: "long" })}</strong></div><div><span>TOTAL</span><strong>{money.format(paymentResult.order.subtotal_kobo / 100)}</strong></div><div><span>PAYMENT</span><strong>{paymentResult.order.payment_status === "paid" ? "Paid" : paymentResult.attempt_status}</strong></div>{paymentResult.order.payment_status === "paid" && <div><span>CONFIRMATION EMAIL</span><strong className="email-status-value">{paymentResult.order.email_status === "sent" ? `Sent to ${user?.email}` : paymentResult.order.email_status === "not_configured" ? "Mailgun setup is still needed" : "Email delivery needs attention"}</strong></div>}</div>}
+          {paymentResult?.order && <div className="success-card"><div><span>ORDER NUMBER</span><strong>{paymentResult.order.order_number}</strong></div><div><span>PICKUP DATE</span><strong>{new Date(`${paymentResult.order.pickup_date}T12:00:00`).toLocaleDateString("en-NG", { weekday: "long", day: "numeric", month: "long" })}</strong></div><div><span>{paymentResult.order.payment_status === "paid" ? "AMOUNT PAID" : "TOTAL"}</span><strong>{money.format(paymentResult.order.subtotal_kobo / 100)}</strong></div><div><span>PAYMENT</span><strong>{paymentResult.order.payment_status === "paid" ? "Verified" : paymentResult.attempt_status}</strong></div>{paymentResult.order.payment_status === "paid" && <div><span>RECEIPT</span><strong className="email-status-value">{paymentResult.order.email_status === "sent" ? `Sent to ${user?.email}` : paymentResult.order.email_status === "not_configured" ? "Email confirmation is not configured" : "Email delivery needs attention"}</strong></div>}</div>}
           <div className="success-actions">
             {paymentResult?.order?.payment_status === "paid" ? <button className="button button-dark" onClick={() => setView("orders")}>See my orders <ArrowRight size={16} /></button> : <button className="button button-dark" disabled={placingOrder || paymentChecking} onClick={() => paymentResult?.order ? startPaystackCheckout(paymentResult.order.id) : checkPayment(paymentReference)}>{paymentChecking ? "Checking payment…" : paymentResult?.attempt_status === "pending" ? "Continue payment" : paymentResult ? "Try payment again" : "Check payment"} <ArrowRight size={16} /></button>}
             {paymentResult?.order?.payment_status !== "paid" && <button className="text-button" onClick={() => user ? setView("checkout") : setAuthOpen(true)}>Return to checkout</button>}
-            {paymentResult?.order?.payment_status === "paid" && <button className="text-button" onClick={goShop}>Keep browsing</button>}
+            {paymentResult?.order?.payment_status === "paid" && <button className="text-button" onClick={goShop}>Continue Shopping</button>}
           </div>
         </main>
       )}

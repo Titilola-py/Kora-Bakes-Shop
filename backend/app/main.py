@@ -7,6 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
@@ -147,6 +148,20 @@ def require_checkout_ready(payload: OrderCreate) -> None:
         raise HTTPException(status_code=422, detail="Each product can only appear once in the cart")
     if any(product_id not in PRODUCT_BY_ID for product_id in ids):
         raise HTTPException(status_code=422, detail="Your cart contains a product that is no longer available")
+
+
+def get_public_app_origin() -> str:
+    origin = os.getenv("APP_ORIGIN", "").strip().rstrip("/")
+    parsed_origin = urlsplit(origin)
+    if (
+        parsed_origin.scheme not in {"http", "https"}
+        or not parsed_origin.netloc
+        or parsed_origin.path
+        or parsed_origin.query
+        or parsed_origin.fragment
+    ):
+        raise PaystackError("APP_ORIGIN must be set to the public shop origin.")
+    return origin
 
 
 async def settle_verified_payment(
@@ -364,10 +379,8 @@ async def initialize_order_payment(
     db.commit()
     db.refresh(attempt)
 
-    callback_url = os.getenv("PAYSTACK_CALLBACK_URL", "").strip()
-    if not callback_url:
-        callback_url = f"{os.getenv('APP_ORIGIN', 'http://localhost:5173').rstrip('/')}/"
     try:
+        callback_url = f"{get_public_app_origin()}/"
         result = await initialize_transaction(
             attempt.reference,
             order.user_email,

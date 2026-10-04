@@ -23,7 +23,7 @@ def create_pending_order(client):
     }).json()
 
 
-def initialize_test_payment(client, monkeypatch, order_id):
+def initialize_test_payment(client, monkeypatch, order_id, app_origin="https://kora-bakes.test"):
     references = []
 
     async def initialize(reference, email, amount_kobo, callback_url):
@@ -31,6 +31,10 @@ def initialize_test_payment(client, monkeypatch, order_id):
         return {"authorization_url": "https://checkout.paystack.test/start", "access_code": "test-access"}
 
     monkeypatch.setenv("PAYSTACK_SECRET_KEY", "sk_test_for-tests")
+    if app_origin is None:
+        monkeypatch.delenv("APP_ORIGIN", raising=False)
+    else:
+        monkeypatch.setenv("APP_ORIGIN", app_origin)
     monkeypatch.setattr("app.main.initialize_transaction", initialize)
     response = client.post(f"/api/orders/{order_id}/payments/initialize")
     return response, references
@@ -73,13 +77,36 @@ def test_order_creation_saves_snapshot_and_server_calculates_total(client, monke
 
 def test_paystack_initialization_uses_saved_server_total_and_owner_email(client, monkeypatch):
     order = create_pending_order(client)
-    response, calls = initialize_test_payment(client, monkeypatch, order["id"])
+    monkeypatch.setenv("PAYSTACK_CALLBACK_URL", "http://localhost:5173/")
+    response, calls = initialize_test_payment(
+        client, monkeypatch, order["id"], app_origin="https://kora-bakes.onrender.com"
+    )
 
     assert response.status_code == 200
     assert response.json()["authorization_url"] == "https://checkout.paystack.test/start"
     assert "sk_test_for-tests" not in response.text
     assert calls[0][1:3] == ("mina@example.com", 1_300_000)
     assert calls[0][0] == response.json()["reference"]
+    assert calls[0][3] == "https://kora-bakes.onrender.com/"
+
+
+def test_paystack_initialization_fails_closed_without_app_origin(client, monkeypatch):
+    order = create_pending_order(client)
+    monkeypatch.setenv("PAYSTACK_CALLBACK_URL", "http://localhost:5173/")
+    response, calls = initialize_test_payment(client, monkeypatch, order["id"], app_origin=None)
+
+    assert response.status_code == 503
+    assert calls == []
+
+
+def test_paystack_initialization_uses_local_app_origin(client, monkeypatch):
+    order = create_pending_order(client)
+    response, calls = initialize_test_payment(
+        client, monkeypatch, order["id"], app_origin="http://localhost:5173"
+    )
+
+    assert response.status_code == 200
+    assert calls[0][3] == "http://localhost:5173/"
 
 
 def test_paystack_rejects_live_secret_keys(monkeypatch):
@@ -218,6 +245,33 @@ def test_signed_webhook_verifies_and_settles_idempotently(client, monkeypatch):
 
     assert first.status_code == second.status_code == 200
     assert first.json()["status"] == "processed"
+    assert len(email_calls) == 1
+
+
+def test_callback_and_webhook_settlement_sends_only_one_receipt(client, monkeypatch):
+    order = create_pending_order(client)
+    initialized, _ = initialize_test_payment(client, monkeypatch, order["id"])
+    reference = initialized.json()["reference"]
+    email_calls = []
+
+    async def verified(_reference):
+        return {"reference": reference, "status": "success", "amount": 1_300_000, "currency": "NGN", "id": 1234}
+
+    async def mail_sent(*_args):
+        email_calls.append(True)
+        return "sent"
+
+    monkeypatch.setattr("app.main.verify_transaction", verified)
+    monkeypatch.setattr("app.main.send_confirmation", mail_sent)
+    monkeypatch.setenv("PAYSTACK_SECRET_KEY", "sk_test_for-tests")
+    callback = client.post("/api/payments/verify", json={"reference": reference})
+    raw_body = json.dumps({"event": "charge.success", "data": {"reference": reference}}, separators=(",", ":")).encode()
+    signature = hmac.new(b"sk_test_for-tests", raw_body, hashlib.sha512).hexdigest()
+    webhook = client.post("/api/payments/webhook", content=raw_body, headers={"X-Paystack-Signature": signature})
+
+    assert callback.status_code == webhook.status_code == 200
+    assert callback.json()["order"]["payment_status"] == "paid"
+    assert webhook.json()["status"] == "processed"
     assert len(email_calls) == 1
 
 
