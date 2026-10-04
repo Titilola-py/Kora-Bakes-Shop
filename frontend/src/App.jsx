@@ -108,6 +108,21 @@ function App() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All bakes");
   const [selectedCupcakeVariant, setSelectedCupcakeVariant] = useState("cupcakes-box-6");
+  const [selectedProductId, setSelectedProductId] = useState(null);
+  const [detailQuantity, setDetailQuantity] = useState(1);
+  const [checkoutSelection, setCheckoutSelection] = useState(() => {
+    try {
+      const savedSelection = JSON.parse(window.localStorage.getItem("kora-buy-now-selection") || "null");
+      return savedSelection && typeof savedSelection.productId === "string"
+        && Number.isInteger(savedSelection.quantity)
+        && savedSelection.quantity >= 1
+        && savedSelection.quantity <= 25
+        ? savedSelection
+        : null;
+    } catch {
+      return null;
+    }
+  });
   const [view, setView] = useState("shop");
   const [pickupName, setPickupName] = useState("");
   const [pickupDate, setPickupDate] = useState(todayLocal);
@@ -204,6 +219,19 @@ function App() {
     ...product,
     quantity: cart[product.id],
   }));
+  const baseDetailProduct = products.find((product) => product.id === selectedProductId);
+  const detailVariants = baseDetailProduct
+    ? isCupcakeBox(baseDetailProduct) ? products.filter(isCupcakeBox) : [baseDetailProduct]
+    : [];
+  const detailProduct = detailVariants.find((product) => product.id === selectedProductId) || baseDetailProduct;
+  const checkoutLines = checkoutSelection
+    ? products.filter((product) => product.id === checkoutSelection.productId).map((product) => ({
+      ...product,
+      quantity: checkoutSelection.quantity,
+    }))
+    : cartLines;
+  const checkoutItemCount = checkoutLines.reduce((count, line) => count + line.quantity, 0);
+  const checkoutTotalKobo = checkoutLines.reduce((total, line) => total + line.price_kobo * line.quantity, 0);
   const itemCount = cartLines.reduce((count, line) => count + line.quantity, 0);
   const totalKobo = cartLines.reduce((total, line) => total + line.price_kobo * line.quantity, 0);
 
@@ -243,8 +271,45 @@ function App() {
     });
   };
 
+  const openProduct = (productId) => {
+    setSelectedProductId(productId);
+    const product = products.find((item) => item.id === productId);
+    if (product && isCupcakeBox(product)) setSelectedCupcakeVariant(productId);
+    setDetailQuantity(1);
+    setView("product");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const addDetailProductToCart = () => {
+    if (!detailProduct) return;
+    updateCart(detailProduct.id, detailQuantity);
+    setView("shop");
+    showToast(`${detailProduct.name} (${detailProduct.unit}) added to your bag.`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const buyDetailProductNow = () => {
+    if (!detailProduct) return;
+    const selection = { productId: detailProduct.id, quantity: detailQuantity };
+    setCheckoutSelection(selection);
+    window.localStorage.setItem("kora-buy-now-selection", JSON.stringify(selection));
+    if (!user) {
+      window.localStorage.setItem(CHECKOUT_RESUME_KEY, "true");
+      setAuthOpen(true);
+      return;
+    }
+    setView("checkout");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const clearCheckoutSelection = () => {
+    setCheckoutSelection(null);
+    window.localStorage.removeItem("kora-buy-now-selection");
+  };
+
   const startCheckout = () => {
     if (!itemCount) return;
+    clearCheckoutSelection();
     setCartOpen(false);
     if (!user) {
       window.localStorage.setItem(CHECKOUT_RESUME_KEY, "true");
@@ -296,9 +361,13 @@ function App() {
       setPickupDate(result.order.pickup_date);
       setPickupNote(result.order.notes);
       if (result.order.payment_status === "paid") {
-        setCart({});
+        if (checkoutSelection) {
+          clearCheckoutSelection();
+        } else {
+          setCart({});
+          window.localStorage.removeItem("kora-cart");
+        }
         setPendingPaymentOrder(null);
-        window.localStorage.removeItem("kora-cart");
         window.localStorage.removeItem("kora-pending-payment-order");
       }
     } catch (error) {
@@ -335,14 +404,14 @@ function App() {
 
   const submitOrder = async (event) => {
     event.preventDefault();
-    if (!session?.access_token || !cartLines.length) return;
+    if (!session?.access_token || !checkoutLines.length) return;
     setPlacingOrder(true);
     try {
       const checkoutPayload = {
         customer_name: pickupName,
         pickup_date: pickupDate,
         notes: pickupNote,
-        items: cartLines.map(({ id, quantity }) => ({ product_id: id, quantity })),
+        items: checkoutLines.map(({ id, quantity }) => ({ product_id: id, quantity })),
       };
       let orderId;
       if (
@@ -377,6 +446,7 @@ function App() {
   };
 
   const goShop = () => {
+    clearCheckoutSelection();
     const callbackUrl = new URL(window.location.href);
     callbackUrl.searchParams.delete("reference");
     callbackUrl.searchParams.delete("trxref");
@@ -457,16 +527,16 @@ function App() {
                       : [product];
                     const selectedProduct = variants.find((variant) => variant.id === selectedCupcakeVariant) || variants[0];
                     return (
-                    <article className="product-card" key={product.id} style={{ "--card-index": index }}>
+                    <article className="product-card" key={product.id} style={{ "--card-index": index }} onClick={() => openProduct(selectedProduct.id)}>
                       <div className="product-media">
-                        <ProductImage product={product} />
-                        {product.badge && <span className="product-badge">{product.badge}</span>}
-                        <button className="quick-add" onClick={() => { updateCart(selectedProduct.id, 1); showToast(`${selectedProduct.name} (${selectedProduct.unit}) added to your bag.`); }} aria-label={`Add ${selectedProduct.name}, ${selectedProduct.unit}, to bag`}><Plus size={15} /><span>Add</span></button>
+                        <button className="product-image-open" aria-label={`View ${selectedProduct.name} details`} onClick={(event) => { event.stopPropagation(); openProduct(selectedProduct.id); }}><ProductImage product={selectedProduct} /></button>
+                        {selectedProduct.badge && <span className="product-badge">{selectedProduct.badge}</span>}
+                        <button className="quick-add" onClick={(event) => { event.stopPropagation(); updateCart(selectedProduct.id, 1); showToast(`${selectedProduct.name} (${selectedProduct.unit}) added to your bag.`); }} aria-label={`Add ${selectedProduct.name}, ${selectedProduct.unit}, to bag`}><Plus size={15} /><span>Add</span></button>
                       </div>
                       <div className="product-info">
                         <div className="product-category">{product.category} <span>·</span> {selectedProduct.unit}</div>
-                        <div className="product-title-row"><h3>{productDisplayName(selectedProduct)}</h3><strong>{money.format(selectedProduct.price_kobo / 100)}</strong></div>
-                        {variants.length > 1 && <label className="product-variant-picker"><span>Choose a box</span><select aria-label="Choose a cupcake box size" value={selectedProduct.id} onChange={(event) => setSelectedCupcakeVariant(event.target.value)}>{variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.unit}</option>)}</select></label>}
+                        <div className="product-title-row"><h3><button className="product-name-open" onClick={(event) => { event.stopPropagation(); openProduct(selectedProduct.id); }}>{productDisplayName(selectedProduct)}</button></h3><strong>{money.format(selectedProduct.price_kobo / 100)}</strong></div>
+                        {variants.length > 1 && <label className="product-variant-picker"><span>Choose a box</span><select aria-label="Choose a cupcake box size" value={selectedProduct.id} onClick={(event) => event.stopPropagation()} onChange={(event) => { event.stopPropagation(); setSelectedCupcakeVariant(event.target.value); }} onKeyDown={(event) => event.stopPropagation()}>{variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.unit}</option>)}</select></label>}
                         <p>{selectedProduct.description}</p>
                         {cart[selectedProduct.id] > 0 && <div className="added-line"><Check size={13} /> {cart[selectedProduct.id]} in your bag</div>}
                       </div>
@@ -494,6 +564,46 @@ function App() {
         </>
       )}
 
+      {view === "product" && (
+        <main className="page-wrap product-detail-page">
+          <button className="back-link" onClick={goShop}><ArrowLeft size={16} /> Back to the shop</button>
+          {detailProduct ? (
+            <div className="product-detail-layout">
+              <div className="product-detail-media">
+                <ProductImage product={detailProduct} />
+                {detailProduct.badge && <span className="product-detail-badge">{detailProduct.badge}</span>}
+              </div>
+              <section className="product-detail-copy" aria-labelledby="product-detail-title">
+                <div className="eyebrow"><span /> {detailProduct.category}</div>
+                <h1 id="product-detail-title">{productDisplayName(detailProduct)}</h1>
+                <p className="product-detail-description">{detailProduct.description}</p>
+                <div className="product-detail-price">{money.format(detailProduct.price_kobo / 100)} <span>/ {detailProduct.unit}</span></div>
+                {detailVariants.length > 1 && (
+                  <label className="product-detail-variant">
+                    Pack size
+                    <select value={detailProduct.id} onChange={(event) => { setSelectedProductId(event.target.value); setSelectedCupcakeVariant(event.target.value); }}>
+                      {detailVariants.map((variant) => <option key={variant.id} value={variant.id}>{variant.unit}</option>)}
+                    </select>
+                  </label>
+                )}
+                <div className="product-detail-quantity">
+                  <span>Quantity</span>
+                  <div className="quantity-control">
+                    <button type="button" aria-label="Decrease quantity" disabled={detailQuantity <= 1} onClick={() => setDetailQuantity((quantity) => Math.max(1, quantity - 1))}><Minus size={14} /></button>
+                    <output aria-live="polite">{detailQuantity}</output>
+                    <button type="button" aria-label="Increase quantity" disabled={detailQuantity >= 25} onClick={() => setDetailQuantity((quantity) => Math.min(25, quantity + 1))}><Plus size={14} /></button>
+                  </div>
+                </div>
+                <div className="product-detail-actions">
+                  <button className="button button-outline" onClick={addDetailProductToCart}>Add to Cart <ShoppingBag size={16} /></button>
+                  <button className="button button-dark" onClick={buyDetailProductNow}>Buy Now <ArrowRight size={16} /></button>
+                </div>
+              </section>
+            </div>
+          ) : <div className="notice">This bake is not available. Return to the shop to browse the current menu.</div>}
+        </main>
+      )}
+
       {view === "checkout" && (
         <main className="page-wrap checkout-page">
           <button className="back-link" onClick={goShop}><ArrowLeft size={16} /> Back to the shop</button>
@@ -509,11 +619,11 @@ function App() {
               <p className="checkout-disclaimer">Pay securely through Paystack. Your pickup order is confirmed after payment.</p>
             </form>
             <aside className="order-summary">
-              <div className="summary-title"><h2>Your little bundle</h2><span>{itemCount} {itemCount === 1 ? "item" : "items"}</span></div>
+              <div className="summary-title"><h2>Your little bundle</h2><span>{checkoutItemCount} {checkoutItemCount === 1 ? "item" : "items"}</span></div>
               <div className="summary-lines">
-                {cartLines.map((line) => <div className="summary-line" key={line.id}><div className="summary-thumb"><img src={line.image_url} alt="" /></div><div className="summary-product"><strong>{line.name}</strong><span>{line.quantity} × {money.format(line.price_kobo / 100)}</span></div><strong>{money.format(line.price_kobo * line.quantity / 100)}</strong></div>)}
+                {checkoutLines.map((line) => <div className="summary-line" key={line.id}><div className="summary-thumb"><img src={line.image_url} alt="" /></div><div className="summary-product"><strong>{line.name}</strong><span>{line.quantity} × {money.format(line.price_kobo / 100)}</span></div><strong>{money.format(line.price_kobo * line.quantity / 100)}</strong></div>)}
               </div>
-              <div className="summary-total"><span>Subtotal</span><strong>{money.format(totalKobo / 100)}</strong></div>
+              <div className="summary-total"><span>Subtotal</span><strong>{money.format(checkoutTotalKobo / 100)}</strong></div>
               <div className="pickup-summary"><Clock3 size={15} /><span>Pickup date<br /><strong>{pickupDate ? new Date(`${pickupDate}T12:00:00`).toLocaleDateString("en-NG", { weekday: "long", day: "numeric", month: "long" }) : "Choose a date"}</strong></span></div>
             </aside>
           </div>
