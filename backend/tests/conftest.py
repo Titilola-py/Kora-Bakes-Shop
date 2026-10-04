@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import CurrentUser, get_current_user
-from app.database import Order, PaymentAttempt, SessionLocal
+from app.database import CartItem, Order, PaymentAttempt, SessionLocal
 from app.main import app, get_db
 
 USER_A = CurrentUser(id="11111111-1111-4111-8111-111111111111", email="mina@example.com", display_name="Mina Ade")
@@ -38,6 +38,7 @@ def client(current_user):
     app.dependency_overrides[get_db] = override_db
     with TestClient(app) as test_client:
         with SessionLocal() as db:
+            db.query(CartItem).delete()
             db.query(PaymentAttempt).delete()
             db.query(Order).delete()
             db.commit()

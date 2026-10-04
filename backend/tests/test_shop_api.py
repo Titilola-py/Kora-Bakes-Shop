@@ -117,6 +117,7 @@ def test_paystack_rejects_live_secret_keys(monkeypatch):
 
 def test_verified_payment_marks_order_paid_and_sends_email_once(client, monkeypatch):
     order = create_pending_order(client)
+    client.put("/api/cart/items/banana-bread", json={"quantity": 1})
     initialized, _ = initialize_test_payment(client, monkeypatch, order["id"])
     reference = initialized.json()["reference"]
     email_calls = []
@@ -138,6 +139,7 @@ def test_verified_payment_marks_order_paid_and_sends_email_once(client, monkeypa
     assert first.json()["order"]["payment_status"] == "paid"
     assert first.json()["order"]["email_status"] == "sent"
     assert email_calls and len(email_calls) == 1
+    assert client.get("/api/cart").json() == {"items": [], "item_count": 0, "subtotal_kobo": 0}
 
 
 @pytest.mark.parametrize(
@@ -250,6 +252,7 @@ def test_signed_webhook_verifies_and_settles_idempotently(client, monkeypatch):
 
 def test_callback_and_webhook_settlement_sends_only_one_receipt(client, monkeypatch):
     order = create_pending_order(client)
+    client.put("/api/cart/items/croissant-box", json={"quantity": 1})
     initialized, _ = initialize_test_payment(client, monkeypatch, order["id"])
     reference = initialized.json()["reference"]
     email_calls = []
@@ -265,6 +268,9 @@ def test_callback_and_webhook_settlement_sends_only_one_receipt(client, monkeypa
     monkeypatch.setattr("app.main.send_confirmation", mail_sent)
     monkeypatch.setenv("PAYSTACK_SECRET_KEY", "sk_test_for-tests")
     callback = client.post("/api/payments/verify", json={"reference": reference})
+    assert callback.status_code == 200
+    assert client.get("/api/cart").json()["items"] == []
+    client.put("/api/cart/items/banana-bread", json={"quantity": 2})
     raw_body = json.dumps({"event": "charge.success", "data": {"reference": reference}}, separators=(",", ":")).encode()
     signature = hmac.new(b"sk_test_for-tests", raw_body, hashlib.sha512).hexdigest()
     webhook = client.post("/api/payments/webhook", content=raw_body, headers={"X-Paystack-Signature": signature})
@@ -272,6 +278,7 @@ def test_callback_and_webhook_settlement_sends_only_one_receipt(client, monkeypa
     assert callback.status_code == webhook.status_code == 200
     assert callback.json()["order"]["payment_status"] == "paid"
     assert webhook.json()["status"] == "processed"
+    assert client.get("/api/cart").json()["items"][0]["product_id"] == "banana-bread"
     assert len(email_calls) == 1
 
 
@@ -326,6 +333,89 @@ def test_orders_require_an_authenticated_user(client):
     app.dependency_overrides.pop(get_current_user, None)
     response = client.get("/api/orders")
     assert response.status_code == 401
+
+
+def test_cart_requires_an_authenticated_user(client):
+    app.dependency_overrides.pop(get_current_user, None)
+    response = client.get("/api/cart")
+    assert response.status_code == 401
+
+
+def test_authenticated_user_reads_empty_cart(client):
+    response = client.get("/api/cart")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "item_count": 0, "subtotal_kobo": 0}
+
+
+def test_cart_item_uses_catalog_product_and_price(client):
+    response = client.put("/api/cart/items/croissant-box", json={"quantity": 2, "price_kobo": 1})
+
+    assert response.status_code == 200
+    cart = response.json()
+    assert cart["item_count"] == 2
+    assert cart["subtotal_kobo"] == 1_300_000
+    assert cart["items"][0]["product_id"] == "croissant-box"
+    assert cart["items"][0]["product"]["price_kobo"] == 650_000
+    assert cart["items"][0]["line_total_kobo"] == 1_300_000
+
+    updated = client.put("/api/cart/items/croissant-box", json={"quantity": 3})
+    assert updated.json()["items"][0]["quantity"] == 3
+    assert updated.json()["subtotal_kobo"] == 1_950_000
+
+
+@pytest.mark.parametrize("quantity", [-1, 26])
+def test_cart_rejects_out_of_range_quantity(client, quantity):
+    response = client.put("/api/cart/items/croissant-box", json={"quantity": quantity})
+
+    assert response.status_code == 422
+
+
+def test_zero_quantity_and_delete_remove_cart_item(client):
+    client.put("/api/cart/items/croissant-box", json={"quantity": 2})
+    zero_quantity = client.put("/api/cart/items/croissant-box", json={"quantity": 0})
+    assert zero_quantity.status_code == 200
+    assert zero_quantity.json()["items"] == []
+
+    client.put("/api/cart/items/croissant-box", json={"quantity": 1})
+    deleted = client.delete("/api/cart/items/croissant-box")
+    assert deleted.status_code == 200
+    assert deleted.json()["items"] == []
+
+
+def test_replace_and_clear_cart_are_user_scoped(client, current_user):
+    replaced = client.put("/api/cart", json={
+        "items": [
+            {"product_id": "croissant-box", "quantity": 2},
+            {"product_id": "banana-bread", "quantity": 1},
+        ],
+    })
+    assert replaced.status_code == 200
+    assert replaced.json()["item_count"] == 3
+    assert replaced.json()["subtotal_kobo"] == 2_000_000
+
+    current_user["user"] = CurrentUser(
+        id="22222222-2222-4222-8222-222222222222", email="tola@example.com", display_name="Tola"
+    )
+    assert client.get("/api/cart").json()["items"] == []
+    assert client.delete("/api/cart").json() == {"items": [], "item_count": 0, "subtotal_kobo": 0}
+
+    current_user["user"] = CurrentUser(
+        id="11111111-1111-4111-8111-111111111111", email="mina@example.com", display_name="Mina Ade"
+    )
+    assert client.get("/api/cart").json()["item_count"] == 3
+    assert client.delete("/api/cart").json()["items"] == []
+
+
+def test_replace_cart_rejects_duplicate_and_unknown_products(client):
+    duplicate = client.put("/api/cart", json={"items": [
+        {"product_id": "croissant-box", "quantity": 1},
+        {"product_id": "croissant-box", "quantity": 2},
+    ]})
+    unknown = client.put("/api/cart", json={"items": [{"product_id": "not-a-product", "quantity": 1}]})
+
+    assert duplicate.status_code == 422
+    assert unknown.status_code == 422
 
 
 def test_expired_supabase_token_is_rejected(monkeypatch):

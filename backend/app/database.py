@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, Uuid, create_engine, event, func
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Text, Uuid, create_engine, event, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -77,6 +77,17 @@ class OrderItem(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     line_total_kobo: Mapped[int] = mapped_column(Integer, nullable=False)
     order: Mapped[Order] = relationship(back_populates="items")
+
+class CartItem(Base):
+    __tablename__ = "cart_items"
+    __table_args__ = (CheckConstraint("quantity between 1 and 25", name="cart_items_quantity_bounds"),)
+
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    product_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 def init_db() -> None:

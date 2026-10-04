@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 APP_DIR = Path(__file__).resolve().parent
@@ -23,7 +23,7 @@ load_dotenv(APP_DIR.parent / ".env")
 
 from app.auth import CurrentUser, get_current_user
 from app.catalog import PRODUCT_BY_ID, PRODUCTS, public_product
-from app.database import Order, OrderItem, PaymentAttempt, SessionLocal, init_db
+from app.database import CartItem, Order, OrderItem, PaymentAttempt, SessionLocal, init_db
 from app.mailer import receipt_snapshot, send_confirmation
 from app.paystack import (
     PaystackError,
@@ -203,6 +203,7 @@ async def settle_verified_payment(
     if order.payment_status != "paid":
         order.payment_status = "paid"
         order.paid_at = datetime.now(timezone.utc)
+        db.execute(delete(CartItem).where(CartItem.user_id == order.user_id))
 
     send_email = order.email_status == "pending"
     if send_email:
@@ -257,6 +258,139 @@ def public_config() -> dict[str, str | bool]:
 @app.get("/api/products")
 def list_products() -> list[dict[str, object]]:
     return [public_product(product) for product in PRODUCTS]
+
+
+class CartItemUpdateIn(BaseModel):
+    quantity: int = Field(ge=0, le=25)
+
+
+class CartReplaceItemIn(BaseModel):
+    product_id: str = Field(min_length=1, max_length=80)
+    quantity: int = Field(ge=1, le=25)
+
+
+class CartReplaceIn(BaseModel):
+    items: list[CartReplaceItemIn] = Field(max_length=20)
+
+
+class CartLineOut(BaseModel):
+    product_id: str
+    quantity: int
+    product: dict[str, object] | None
+    line_total_kobo: int
+
+
+class CartOut(BaseModel):
+    items: list[CartLineOut]
+    item_count: int
+    subtotal_kobo: int
+
+
+def serialize_cart(user_id: str, db: Session) -> CartOut:
+    cart_items = db.scalars(
+        select(CartItem).where(CartItem.user_id == user_id).order_by(CartItem.product_id)
+    ).all()
+    lines: list[CartLineOut] = []
+    subtotal = 0
+    item_count = 0
+    for cart_item in cart_items:
+        product = PRODUCT_BY_ID.get(cart_item.product_id)
+        line_total = product.price_kobo * cart_item.quantity if product else 0
+        lines.append(CartLineOut(
+            product_id=cart_item.product_id,
+            quantity=cart_item.quantity,
+            product=public_product(product) if product else None,
+            line_total_kobo=line_total,
+        ))
+        subtotal += line_total
+        item_count += cart_item.quantity
+    return CartOut(items=lines, item_count=item_count, subtotal_kobo=subtotal)
+
+
+def validate_cart_product_ids(product_ids: list[str]) -> None:
+    if len(product_ids) != len(set(product_ids)):
+        raise HTTPException(status_code=422, detail="Each product can only appear once in the cart")
+    if any(product_id not in PRODUCT_BY_ID for product_id in product_ids):
+        raise HTTPException(status_code=422, detail="Your cart contains a product that is no longer available")
+
+
+@app.get("/api/cart", response_model=CartOut)
+def get_cart(
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CartOut:
+    return serialize_cart(user.id, db)
+
+
+@app.put("/api/cart", response_model=CartOut)
+def replace_cart(
+    payload: CartReplaceIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CartOut:
+    product_ids = [item.product_id for item in payload.items]
+    validate_cart_product_ids(product_ids)
+    desired = {item.product_id: item.quantity for item in payload.items}
+    existing = {
+        item.product_id: item
+        for item in db.scalars(select(CartItem).where(CartItem.user_id == user.id)).all()
+    }
+
+    for product_id, cart_item in existing.items():
+        if product_id not in desired:
+            db.delete(cart_item)
+        elif cart_item.quantity != desired[product_id]:
+            cart_item.quantity = desired[product_id]
+    for product_id, quantity in desired.items():
+        if product_id not in existing:
+            db.add(CartItem(user_id=user.id, product_id=product_id, quantity=quantity))
+
+    db.commit()
+    return serialize_cart(user.id, db)
+
+
+@app.put("/api/cart/items/{product_id}", response_model=CartOut)
+def set_cart_item_quantity(
+    product_id: str,
+    payload: CartItemUpdateIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CartOut:
+    if product_id not in PRODUCT_BY_ID:
+        raise HTTPException(status_code=422, detail="Your cart contains a product that is no longer available")
+    cart_item = db.get(CartItem, (user.id, product_id))
+    if payload.quantity == 0:
+        if cart_item is not None:
+            db.delete(cart_item)
+    elif cart_item is None:
+        db.add(CartItem(user_id=user.id, product_id=product_id, quantity=payload.quantity))
+    else:
+        cart_item.quantity = payload.quantity
+    db.commit()
+    return serialize_cart(user.id, db)
+
+
+@app.delete("/api/cart/items/{product_id}", response_model=CartOut)
+def remove_cart_item(
+    product_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CartOut:
+    cart_item = db.get(CartItem, (user.id, product_id))
+    if cart_item is not None:
+        db.delete(cart_item)
+        db.commit()
+    return serialize_cart(user.id, db)
+
+
+@app.delete("/api/cart", response_model=CartOut)
+def clear_cart(
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CartOut:
+    db.execute(delete(CartItem).where(CartItem.user_id == user.id))
+    db.commit()
+    return serialize_cart(user.id, db)
 
 
 class PaymentInitializeOut(BaseModel):

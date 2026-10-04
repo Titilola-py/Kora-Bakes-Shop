@@ -11,6 +11,7 @@ Read [PRD.md](PRD.md) for scope and [AGENTS.md](AGENTS.md) for coding and valida
 - Supabase Auth (Google OAuth) and Supabase Postgres
 - Paystack hosted checkout (TEST mode)
 - Mailgun API for confirmation emails
+- Supabase Realtime for authenticated cross-device carts
 - Render Free web service for the demo deployment
 
 ## Brand assets
@@ -38,6 +39,7 @@ cd backend
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
+python -m alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -48,6 +50,22 @@ npm run dev
 ```
 
 Open `http://localhost:5173`.
+
+## Cart synchronization
+
+- Guests use the existing browser `localStorage` cart (`kora-cart`). Guest carts remain available without signing in.
+- Authenticated carts are stored by FastAPI in Postgres and scoped to the verified Supabase user ID. On sign-in, guest and server quantities merge by taking the greater quantity for each product; this is deterministic and safe to retry. After merge, the server cart is authoritative, with an owner-tagged local cache as an offline fallback.
+- The website and mobile clients share the same cart using the same Supabase account. The server derives product names and prices from the catalog; clients send product IDs and quantities only.
+- Authenticated clients subscribe to Supabase Realtime `postgres_changes` on `public.cart_items`, filtered by `user_id=eq.<authenticated-user-id>`. The migration enables RLS, grants authenticated SELECT with an own-user policy, sets full replica identity, and adds the table to `supabase_realtime`. Clients refresh `GET /api/cart` after an event; FastAPI remains the cart read/write API.
+
+### Mobile API contract
+
+Configure the mobile Supabase client with the same project URL and public anon key exposed by `GET /api/config`, and sign in through the configured Google provider using the platform's supported OAuth/PKCE flow. Register the app's native deep-link callback in Supabase Auth's redirect URL allowlist and configure the matching platform URL scheme/universal link. Read the authenticated session's `access_token` and send it to FastAPI as `Authorization: Bearer <token>`. Never use a service-role key in the mobile app.
+
+- `GET /api/cart` returns `{ "items": [{ "product_id": "croissant-box", "quantity": 2, "product": { "id": "croissant-box", "name": "Butter Croissant Box", "price_kobo": 650000, "unit": "box of 6", "description": "...", "category": "Pastries", "image_url": "...", "badge": "Bestseller" }, "line_total_kobo": 1300000 }], "item_count": 2, "subtotal_kobo": 1300000 }`. An empty cart has an empty `items` array and zero totals.
+- `PUT /api/cart` replaces the cart with `{ "items": [{ "product_id": "croissant-box", "quantity": 2 }] }`; use this to merge a guest cart after login. Quantities are 1–25, and product IDs must exist in the backend catalog.
+- `PUT /api/cart/items/{product_id}` accepts `{ "quantity": 1 }` to set a quantity; zero removes the item. `DELETE /api/cart/items/{product_id}` removes one item, and `DELETE /api/cart` clears the cart.
+- For live updates, subscribe with the authenticated Supabase client to `postgres_changes` on schema `public`, table `cart_items`, events `*`, filtered by the signed-in user's UUID. On an event, call `GET /api/cart`; do not trust event payloads as prices or cart authority. The migration configures the publication and RLS policy.
 
 ## Paystack TEST setup
 
@@ -94,7 +112,7 @@ See Mailgun's [message sending API](https://documentation.mailgun.com/docs/mailg
 2. Set `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM_EMAIL`, and `PAYSTACK_SECRET_KEY` as Render environment variables. The Blueprint sets `APP_ORIGIN` to `https://kora-bakes.onrender.com`. Use a Postgres connection string for durable production storage; Mailgun values must correspond to the EU sending domain.
 3. Configure Paystack's test webhook URL as `https://kora-bakes.onrender.com/api/payments/webhook`. The backend rejects live keys, so real live payments require a separately reviewed implementation before launch. If `PAYSTACK_CALLBACK_URL` is set on an existing Render service, remove it; the backend derives the callback from `APP_ORIGIN`.
 4. Use the deployed Render URL for Supabase Site URL and allowed redirect URLs, and add it to Google Cloud authorized JavaScript origins.
-5. Apply both SQL migrations in order before the first backend startup. Deploy, then verify Google sign-in, account-scoped order history, and a successful TEST payment with its Mailgun receipt.
+5. Apply the two existing SQL migrations in order before the first backend startup. The Docker service runs `alembic upgrade head` before launching FastAPI, applying the authenticated cart table, its RLS policy, and Realtime publication membership. Deploy, then verify Google sign-in, account-scoped order history, shared carts, and a successful TEST payment with its Mailgun receipt.
 
 Render Free services sleep after inactivity and use an ephemeral filesystem. This app uses Supabase Postgres for orders, so orders are not stored on Render's filesystem. Supabase Free projects may pause after a week of low activity; resume them in Supabase if that happens. Check [Render Free limits](https://render.com/docs/free) and [Supabase Free project pausing](https://supabase.com/docs/guides/platform/free-project-pausing).
 

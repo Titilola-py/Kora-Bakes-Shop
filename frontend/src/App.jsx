@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import BrandMark from "./BrandMark";
 import {
@@ -24,6 +24,9 @@ const money = new Intl.NumberFormat("en-NG", {
   maximumFractionDigits: 0,
 });
 const CHECKOUT_RESUME_KEY = "kora-resume-checkout";
+const CART_OWNER_KEY = "kora-cart-owner";
+const CART_SNAPSHOT_KEY = "kora-cart-server-snapshot";
+const CART_PENDING_SYNC_KEY = "kora-cart-pending-sync";
 let supabaseClient = null;
 const isCupcakeBox = (product) => product.name.startsWith("Cupcakes, box of ");
 const productDisplayName = (product) => isCupcakeBox(product) ? "Cupcakes" : product.name;
@@ -57,6 +60,74 @@ function getSupabaseClient(config) {
   return supabaseClient;
 }
 
+function readCartMap(value) {
+  try {
+    const savedCart = typeof value === "string" ? JSON.parse(value || "{}") : value;
+    if (!savedCart || typeof savedCart !== "object" || Array.isArray(savedCart)) return {};
+    return Object.fromEntries(Object.entries(savedCart).filter(([, quantity]) => (
+      Number.isInteger(quantity) && quantity >= 1 && quantity <= 25
+    )));
+  } catch {
+    return {};
+  }
+}
+
+function readGuestCart() {
+  if (window.localStorage.getItem(CART_OWNER_KEY)) return {};
+  return readCartMap(window.localStorage.getItem("kora-cart"));
+}
+
+function readUserCartCache(userId) {
+  if (window.localStorage.getItem(CART_OWNER_KEY) !== userId) return null;
+  return readCartMap(window.localStorage.getItem("kora-cart"));
+}
+
+function readUserCartSnapshot(userId) {
+  try {
+    const snapshot = JSON.parse(window.localStorage.getItem(CART_SNAPSHOT_KEY) || "null");
+    return snapshot?.userId === userId ? readCartMap(snapshot.cart) : null;
+  } catch {
+    return null;
+  }
+}
+
+function cartMapFromResponse(payload) {
+  return Object.fromEntries((payload.items || []).filter((item) => (
+    typeof item.product_id === "string"
+    && Number.isInteger(item.quantity)
+    && item.quantity >= 1
+    && item.quantity <= 25
+  )).map((item) => [item.product_id, item.quantity]));
+}
+
+function mergeCartMaps(serverCart, guestCart) {
+  const merged = { ...serverCart };
+  for (const [productId, quantity] of Object.entries(guestCart)) {
+    merged[productId] = Math.max(merged[productId] || 0, quantity);
+  }
+  return merged;
+}
+
+function reconcileCartMaps(serverCart, baseCart, localCart) {
+  const reconciled = { ...serverCart };
+  const productIds = new Set([...Object.keys(baseCart), ...Object.keys(localCart)]);
+  for (const productId of productIds) {
+    if ((baseCart[productId] || 0) === (localCart[productId] || 0)) continue;
+    if (localCart[productId]) reconciled[productId] = localCart[productId];
+    else delete reconciled[productId];
+  }
+  return reconciled;
+}
+
+function sameCart(left, right) {
+  const productIds = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...productIds].every((productId) => (left[productId] || 0) === (right[productId] || 0));
+}
+
+function cartReplacementItems(cartMap) {
+  return Object.entries(cartMap).map(([product_id, quantity]) => ({ product_id, quantity }));
+}
+
 function ProductImage({ product }) {
   const [failed, setFailed] = useState(false);
   return (
@@ -84,14 +155,14 @@ function App() {
   const [orders, setOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState("");
-  const [cart, setCart] = useState(() => {
-    try {
-      const savedCart = JSON.parse(window.localStorage.getItem("kora-cart") || "{}");
-      return savedCart && typeof savedCart === "object" && !Array.isArray(savedCart) ? savedCart : {};
-    } catch {
-      return {};
-    }
-  });
+  const [cart, setCart] = useState(readGuestCart);
+  const cartRef = useRef(cart);
+  cartRef.current = cart;
+  const cartSyncRef = useRef({ userId: null, ready: false, snapshot: {} });
+  const cartLocalEditRef = useRef(false);
+  const cartWriteQueueRef = useRef(Promise.resolve());
+  const [cartReadyUserId, setCartReadyUserId] = useState(null);
+  const [cartRetryKey, setCartRetryKey] = useState(0);
   const [pendingPaymentOrder, setPendingPaymentOrder] = useState(() => {
     try {
       return JSON.parse(window.localStorage.getItem("kora-pending-payment-order") || "null");
@@ -130,10 +201,6 @@ function App() {
   const [placingOrder, setPlacingOrder] = useState(false);
   const [placedOrder, setPlacedOrder] = useState(null);
   const [toast, setToast] = useState("");
-
-  useEffect(() => {
-    window.localStorage.setItem("kora-cart", JSON.stringify(cart));
-  }, [cart]);
 
   useEffect(() => {
     let active = true;
@@ -178,12 +245,26 @@ function App() {
       setSession(data.session);
       resumeCheckoutIfRequested(data.session);
     });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      const nextUserId = nextSession?.user?.id;
+      if (nextUserId && cartSyncRef.current.userId && cartSyncRef.current.userId !== nextUserId) {
+        cartSyncRef.current = { userId: null, ready: false, snapshot: {} };
+        cartLocalEditRef.current = false;
+        setCartReadyUserId(null);
+        setCart({});
+      }
       setSession(nextSession);
       setAuthError("");
       if (nextSession) {
         resumeCheckoutIfRequested(nextSession);
-      } else {
+      } else if (event === "SIGNED_OUT") {
+        cartSyncRef.current = { userId: null, ready: false, snapshot: {} };
+        cartLocalEditRef.current = false;
+        setCartReadyUserId(null);
+        window.localStorage.removeItem("kora-cart");
+        window.localStorage.removeItem(CART_OWNER_KEY);
+        window.localStorage.removeItem(CART_SNAPSHOT_KEY);
+        window.localStorage.removeItem(CART_PENDING_SYNC_KEY);
         setCart({});
         setOrders([]);
         setView("shop");
@@ -201,6 +282,220 @@ function App() {
   }, []);
 
   const user = session?.user ?? null;
+  useEffect(() => {
+    const ownerId = window.localStorage.getItem(CART_OWNER_KEY);
+    if (user?.id) {
+      if (cartReadyUserId === user.id) {
+        window.localStorage.setItem("kora-cart", JSON.stringify(cart));
+        window.localStorage.setItem(CART_OWNER_KEY, user.id);
+        const snapshot = cartSyncRef.current.userId === user.id && cartSyncRef.current.ready
+          ? cartSyncRef.current.snapshot
+          : readUserCartSnapshot(user.id);
+        if (snapshot && sameCart(cart, snapshot)) {
+          if (window.localStorage.getItem(CART_PENDING_SYNC_KEY) === user.id) {
+            window.localStorage.removeItem(CART_PENDING_SYNC_KEY);
+          }
+        } else if (cartLocalEditRef.current) {
+          window.localStorage.setItem(CART_PENDING_SYNC_KEY, user.id);
+        }
+      } else if (ownerId === user.id && cartLocalEditRef.current) {
+        window.localStorage.setItem("kora-cart", JSON.stringify(cart));
+        window.localStorage.setItem(CART_PENDING_SYNC_KEY, user.id);
+      } else if (!ownerId) {
+        window.localStorage.setItem("kora-cart", JSON.stringify(cart));
+      }
+      return;
+    }
+    if (!ownerId) window.localStorage.setItem("kora-cart", JSON.stringify(cart));
+  }, [cart, cartReadyUserId, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !session?.access_token) return undefined;
+    let active = true;
+    const userId = user.id;
+    const accessToken = session.access_token;
+    const guestCart = readGuestCart();
+    const cachedCart = readUserCartCache(userId);
+
+    cartSyncRef.current = { userId, ready: false, snapshot: {} };
+    setCartReadyUserId(null);
+    if (cachedCart) setCart(cachedCart);
+    else if (!window.localStorage.getItem(CART_OWNER_KEY)) setCart(guestCart);
+
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const synchronizeInitialCart = async () => {
+      try {
+        const serverPayload = await responseData(await fetch("/api/cart", { headers }));
+        const serverCart = cartMapFromResponse(serverPayload);
+        const latestGuestCart = readGuestCart();
+        const latestCachedCart = readUserCartCache(userId);
+        const cachedSnapshot = readUserCartSnapshot(userId);
+        const hasPendingLocalChanges = window.localStorage.getItem(CART_PENDING_SYNC_KEY) === userId
+          || cartLocalEditRef.current;
+        const mergedCart = hasPendingLocalChanges && latestCachedCart
+          ? reconcileCartMaps(serverCart, cachedSnapshot || {}, latestCachedCart)
+          : mergeCartMaps(serverCart, latestGuestCart || guestCart);
+        let finalCart = serverCart;
+        if (!sameCart(mergedCart, serverCart)) {
+          const mergedPayload = await responseData(await fetch("/api/cart", {
+            method: "PUT",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ items: cartReplacementItems(mergedCart) }),
+          }));
+          finalCart = cartMapFromResponse(mergedPayload);
+        }
+        if (!active) return;
+        window.localStorage.setItem("kora-cart", JSON.stringify(finalCart));
+        window.localStorage.setItem(CART_OWNER_KEY, userId);
+        window.localStorage.setItem(CART_SNAPSHOT_KEY, JSON.stringify({ userId, cart: finalCart }));
+        if (window.localStorage.getItem(CART_PENDING_SYNC_KEY) === userId) {
+          window.localStorage.removeItem(CART_PENDING_SYNC_KEY);
+        }
+        cartLocalEditRef.current = false;
+        cartSyncRef.current = { userId, ready: true, snapshot: finalCart };
+        setCart(finalCart);
+        setCartReadyUserId(userId);
+      } catch (error) {
+        if (!active) return;
+        if (!cartLocalEditRef.current) {
+          if (cachedCart) setCart(cachedCart);
+          else if (!window.localStorage.getItem(CART_OWNER_KEY)) setCart(guestCart);
+        }
+        showToast(error.message || "Your cart is saved locally and will sync when the connection returns.");
+      }
+    };
+    void synchronizeInitialCart();
+    return () => {
+      active = false;
+    };
+  }, [cartRetryKey, session?.access_token, showToast, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !session?.access_token || cartReadyUserId !== user.id) return undefined;
+    const userId = user.id;
+    const accessToken = session.access_token;
+    const syncState = cartSyncRef.current;
+    if (syncState.userId !== userId || !syncState.ready || sameCart(cart, syncState.snapshot)) return undefined;
+
+    const timer = window.setTimeout(() => {
+      cartWriteQueueRef.current = cartWriteQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (cartSyncRef.current.userId !== userId || !cartSyncRef.current.ready) return;
+          const previousCart = cartSyncRef.current.snapshot;
+          const desiredCart = cartRef.current;
+          const changedProductIds = [...new Set([...Object.keys(previousCart), ...Object.keys(desiredCart)])]
+            .filter((productId) => (previousCart[productId] || 0) !== (desiredCart[productId] || 0));
+          if (!changedProductIds.length) return;
+          await Promise.all(changedProductIds.map((productId) => {
+            const path = `/api/cart/items/${encodeURIComponent(productId)}`;
+            const options = desiredCart[productId]
+              ? {
+                method: "PUT",
+                headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ quantity: desiredCart[productId] }),
+              }
+              : { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } };
+            return responseData(fetch(path, options));
+          }));
+          if (cartSyncRef.current.userId !== userId) return;
+          const savedCart = { ...previousCart };
+          for (const productId of changedProductIds) {
+            if (desiredCart[productId]) savedCart[productId] = desiredCart[productId];
+            else delete savedCart[productId];
+          }
+          cartSyncRef.current.snapshot = savedCart;
+          window.localStorage.setItem("kora-cart", JSON.stringify(savedCart));
+          window.localStorage.setItem(CART_OWNER_KEY, userId);
+          window.localStorage.setItem(CART_SNAPSHOT_KEY, JSON.stringify({ userId, cart: savedCart }));
+          if (sameCart(cartRef.current, desiredCart)) {
+            cartLocalEditRef.current = false;
+            if (window.localStorage.getItem(CART_PENDING_SYNC_KEY) === userId) {
+              window.localStorage.removeItem(CART_PENDING_SYNC_KEY);
+            }
+          } else {
+            window.localStorage.setItem(CART_PENDING_SYNC_KEY, userId);
+          }
+        })
+        .catch((error) => {
+          showToast(error.message || "Cart sync failed. Your local cart is kept; it will retry when the connection returns.");
+        });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [cart, cartReadyUserId, session?.access_token, showToast, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !session?.access_token || !supabase || cartReadyUserId !== user.id) return undefined;
+    const userId = user.id;
+    const accessToken = session.access_token;
+    let refreshTimer;
+    let active = true;
+    const refreshCart = async () => {
+      try {
+        const payload = await responseData(await fetch("/api/cart", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }));
+        if (!active || cartSyncRef.current.userId !== userId) return;
+        const serverCart = cartMapFromResponse(payload);
+        const previousServerCart = cartSyncRef.current.snapshot;
+        const currentCart = cartRef.current;
+        const mergedCart = {};
+        const productIds = new Set([
+          ...Object.keys(serverCart),
+          ...Object.keys(previousServerCart),
+          ...Object.keys(currentCart),
+        ]);
+        for (const productId of productIds) {
+          const hasLocalChange = (currentCart[productId] || 0) !== (previousServerCart[productId] || 0);
+          const quantity = hasLocalChange ? currentCart[productId] : serverCart[productId];
+          if (quantity) mergedCart[productId] = quantity;
+        }
+        cartSyncRef.current.snapshot = serverCart;
+        window.localStorage.setItem(CART_SNAPSHOT_KEY, JSON.stringify({ userId, cart: serverCart }));
+        if (sameCart(mergedCart, serverCart)) {
+          cartLocalEditRef.current = false;
+          if (window.localStorage.getItem(CART_PENDING_SYNC_KEY) === userId) {
+            window.localStorage.removeItem(CART_PENDING_SYNC_KEY);
+          }
+        } else {
+          cartLocalEditRef.current = true;
+          window.localStorage.setItem(CART_PENDING_SYNC_KEY, userId);
+        }
+        if (!sameCart(currentCart, mergedCart)) setCart(mergedCart);
+      } catch (error) {
+        showToast(error.message || "Could not refresh your cart just now.");
+      }
+    };
+    const channel = supabase
+      .channel(`cart:${userId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "cart_items",
+        filter: `user_id=eq.${userId}`,
+      }, () => {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = window.setTimeout(() => void refreshCart(), 80);
+      })
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          showToast("Live cart updates are temporarily unavailable; your cart can still be refreshed from the server.");
+        }
+      });
+    return () => {
+      active = false;
+      window.clearTimeout(refreshTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [cartReadyUserId, session?.access_token, showToast, supabase, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const retryCartSync = () => setCartRetryKey((current) => current + 1);
+    window.addEventListener("online", retryCartSync);
+    return () => window.removeEventListener("online", retryCartSync);
+  }, [user?.id]);
+
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "friend";
   const categories = useMemo(() => ["All bakes", ...new Set(products.map((product) => product.category))], [products]);
   const featuredProduct = products[0] ?? null;
@@ -260,6 +555,7 @@ function App() {
   }, [user, userName]);
 
   const updateCart = (productId, change) => {
+    if (user) cartLocalEditRef.current = true;
     setCart((current) => {
       const quantity = (current[productId] || 0) + change;
       if (quantity <= 0) {
@@ -268,6 +564,15 @@ function App() {
         return next;
       }
       return { ...current, [productId]: Math.min(quantity, 25) };
+    });
+  };
+
+  const removeCartItem = (productId) => {
+    if (user) cartLocalEditRef.current = true;
+    setCart((current) => {
+      const next = { ...current };
+      delete next[productId];
+      return next;
     });
   };
 
@@ -361,12 +666,14 @@ function App() {
       setPickupDate(result.order.pickup_date);
       setPickupNote(result.order.notes);
       if (result.order.payment_status === "paid") {
-        if (checkoutSelection) {
-          clearCheckoutSelection();
-        } else {
-          setCart({});
-          window.localStorage.removeItem("kora-cart");
+        cartLocalEditRef.current = false;
+        cartSyncRef.current.snapshot = {};
+        if (user?.id) {
+          window.localStorage.setItem(CART_SNAPSHOT_KEY, JSON.stringify({ userId: user.id, cart: {} }));
+          window.localStorage.removeItem(CART_PENDING_SYNC_KEY);
         }
+        setCart({});
+        clearCheckoutSelection();
         setPendingPaymentOrder(null);
         window.localStorage.removeItem("kora-pending-payment-order");
       }
@@ -673,7 +980,7 @@ function App() {
           <div className="drawer-header"><div><span className="eyebrow"><span /> YOUR BAG</span><h2>A little something.</h2></div><button className="icon-button" onClick={() => setCartOpen(false)} aria-label="Close bag"><X size={20} /></button></div>
           {cartLines.length === 0 ? <div className="cart-empty"><div className="empty-icon"><ShoppingBag size={23} /></div><h3>Your bag is taking a breather.</h3><p>Find a bake worth bringing home.</p><button className="button button-outline" onClick={() => { setCartOpen(false); goShop(); }}>Explore the shop <ArrowRight size={15} /></button></div> : (
             <>
-              <div className="cart-lines">{cartLines.map((line) => <div className="cart-line" key={line.id}><div className="cart-thumb"><img src={line.image_url} alt="" /></div><div className="cart-line-main"><div className="cart-line-heading"><div><strong>{line.name}</strong><span>{line.unit}</span></div><button className="icon-button remove-item" onClick={() => setCart((current) => { const next = { ...current }; delete next[line.id]; return next; })} aria-label={`Remove ${line.name}`}><X size={16} /></button></div><div className="cart-line-bottom"><div className="quantity-control"><button onClick={() => updateCart(line.id, -1)} aria-label={`Remove one ${line.name}`}><Minus size={14} /></button><span>{line.quantity}</span><button onClick={() => updateCart(line.id, 1)} aria-label={`Add one ${line.name}`}><Plus size={14} /></button></div><strong>{money.format(line.price_kobo * line.quantity / 100)}</strong></div></div></div>)}</div>
+              <div className="cart-lines">{cartLines.map((line) => <div className="cart-line" key={line.id}><div className="cart-thumb"><img src={line.image_url} alt="" /></div><div className="cart-line-main"><div className="cart-line-heading"><div><strong>{line.name}</strong><span>{line.unit}</span></div><button className="icon-button remove-item" onClick={() => removeCartItem(line.id)} aria-label={`Remove ${line.name}`}><X size={16} /></button></div><div className="cart-line-bottom"><div className="quantity-control"><button onClick={() => updateCart(line.id, -1)} aria-label={`Remove one ${line.name}`}><Minus size={14} /></button><span>{line.quantity}</span><button onClick={() => updateCart(line.id, 1)} aria-label={`Add one ${line.name}`}><Plus size={14} /></button></div><strong>{money.format(line.price_kobo * line.quantity / 100)}</strong></div></div></div>)}</div>
               <div className="cart-bottom"><div className="cart-subtotal"><span>Subtotal</span><strong>{money.format(totalKobo / 100)}</strong></div><p>Pickup order</p><button className="button button-dark checkout-button" onClick={startCheckout}>Continue to checkout <ArrowRight size={16} /></button><span className="secure-note"><Check size={13} /> Your order is saved to your account</span></div>
             </>
           )}
