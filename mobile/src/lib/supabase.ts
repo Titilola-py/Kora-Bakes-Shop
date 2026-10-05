@@ -23,10 +23,16 @@ export const isSupabaseConfigured = Boolean(supabaseUrl && supabasePublishableKe
 export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   auth: {
     ...(Platform.OS !== 'web' ? { storage: AsyncStorage } : {}),
+    // Authorization Code + PKCE, matching the website's client. Required for the
+    // Google OAuth redirect, which returns a `code` rather than tokens in the
+    // URL fragment. Email/password sign-in is unaffected by this setting.
+    flowType: 'pkce',
     autoRefreshToken: true,
     // Keeps the session on the device between app launches, so a signed-in
     // user is not asked to sign in again.
     persistSession: true,
+    // Native apps receive the OAuth result through an explicit redirect we
+    // handle ourselves, not by sniffing window.location.
     detectSessionInUrl: false,
   },
 });

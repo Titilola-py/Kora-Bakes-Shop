@@ -30,6 +30,15 @@ export const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '800', color: colors.ink, marginBottom: spacing.sm },
   subtitle: { fontSize: 14, lineHeight: 21, color: colors.inkMuted, marginBottom: spacing.xl },
   switchRow: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg, gap: 6 },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.xl,
+    marginBottom: spacing.xl,
+  },
+  divider: { flex: 1, height: 1, backgroundColor: colors.line },
+  dividerText: { color: colors.inkSoft, fontSize: 12, fontWeight: '600' },
   switchText: { color: colors.inkMuted, fontSize: 14 },
   switchAction: { color: colors.cobalt, fontSize: 14, fontWeight: '700' },
   footnote: {

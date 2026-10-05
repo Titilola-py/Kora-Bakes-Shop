@@ -50,20 +50,61 @@ your PC's `localhost`.
 
 ## Signing in
 
-The login screen supports email + password against the existing Supabase
-project, and the session is persisted on the device so you stay signed in
-between launches.
+The app offers **two** ways in, both against the same Supabase project:
 
-> **Important:** the website signs in with **Google only**. If the account you
-> use on the website was created with Google, it has **no password**, so email
-> sign-in will not work for it yet.
->
-> To use one account on both surfaces, either:
-> 1. Sign in with Google on the website, then in Supabase Dashboard ->
->    Authentication -> Users -> set a password for that user, then sign in on
->    mobile with that email and password. **Same user id, same cart.**
-> 2. Or create a password account in the app ("Create one") and use that account
->    consistently for the acceptance test on both surfaces.
+- **Continue with Google** — the same Google account used on the website.
+- **Email + password** — an alternative for accounts that have a password.
+
+Both resolve to the same Supabase user id for the same account, and therefore
+to the same shared cart.
+
+### Google sign-in requires a build, not Expo Go
+
+**Expo Go cannot run this flow.** Per the Expo docs:
+
+> Expo Go cannot be used for local development and testing of OAuth or OpenID
+> Connect-enabled apps due to the inability to customize your app scheme.
+
+The redirect must come back to *this app*, which means Android needs the
+`korabakes://` scheme registered. Expo Go only registers `exp://`. Google
+sign-in therefore needs a **development build** or a **standalone APK**.
+
+Email/password still works in Expo Go, which is handy for quick UI checks.
+
+### One-time Supabase setup
+
+Add the app's redirect URI to the allow list:
+
+> Supabase Dashboard → Authentication → URL Configuration → Redirect URLs
+
+```
+korabakes://auth/callback
+```
+
+Leave the existing web URL (`https://kora-bakes.onrender.com`) in place — the
+website depends on it. **Do not remove it.**
+
+### Building the APK
+
+With EAS (cloud build, no local Android SDK required):
+
+```bash
+npx eas-cli login          # free Expo account, first time only
+npx eas-cli build -p android --profile preview
+```
+
+You get a download link to an APK. Install it on the phone and the app runs
+standalone — no laptop needed afterwards, which suits a demo.
+
+For a build that hot-reloads from your PC:
+
+```bash
+npx eas-cli build -p android --profile development
+# install the APK, then start Metro and open the dev build on the phone
+```
+
+`npx expo run:android` also works but needs the Android SDK installed locally,
+which is a considerably larger setup.
 
 ## How the shared cart works
 

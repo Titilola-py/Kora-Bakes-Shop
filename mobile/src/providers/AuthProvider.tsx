@@ -9,6 +9,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { signInWithGoogle } from '@/lib/googleAuth';
+import type { GoogleSignInResult } from '@/lib/googleAuth';
 
 type AuthContextValue = {
   user: User | null;
@@ -17,6 +19,7 @@ type AuthContextValue = {
   configured: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
+  signInWithGoogle: () => Promise<GoogleSignInResult>;
   signOut: () => Promise<void>;
 };
 
@@ -77,6 +80,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
   }, []);
 
+  // Google sign-in reuses the same Supabase project and provider as the
+  // website, so it resolves to the same user id and therefore the same cart.
+  // The session is stored by the shared Supabase client, so it persists and
+  // refreshes exactly like an email/password session.
+  const googleSignIn = useCallback(async () => {
+    if (!isSupabaseConfigured) throw new Error('Sign-in is not configured yet.');
+    return signInWithGoogle();
+  }, []);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -85,9 +97,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       configured: isSupabaseConfigured,
       signIn,
       signUp,
+      signInWithGoogle: googleSignIn,
       signOut,
     }),
-    [user, session, isLoading, signIn, signUp, signOut],
+    [user, session, isLoading, signIn, signUp, googleSignIn, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

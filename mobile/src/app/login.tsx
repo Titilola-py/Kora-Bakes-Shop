@@ -12,13 +12,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BrandMark } from '@/components/BrandMark';
 import { Button, Field } from '@/components/Button';
 import { Banner } from '@/components/Feedback';
+import { GoogleButton } from '@/components/GoogleButton';
 import { useAuth } from '@/providers/AuthProvider';
+import { GOOGLE_REDIRECT_URI } from '@/lib/googleAuth';
 import { styles } from '@/styles/login';
 import { spacing } from '@/lib/theme';
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { signIn, signUp, configured } = useAuth();
+  const { signIn, signUp, signInWithGoogle, configured } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -26,6 +28,23 @@ export default function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
+
+  // Google uses the same Supabase project and provider as the website, so it
+  // lands on the same account - and therefore the same shared cart.
+  async function handleGoogle() {
+    setError(null);
+    setNotice(null);
+    setGoogleBusy(true);
+    try {
+      const result = await signInWithGoogle();
+      if (result === 'cancelled') setNotice('Google sign-in was cancelled.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Google sign-in failed.');
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
 
   async function handleSubmit() {
     setError(null);
@@ -88,6 +107,14 @@ export default function LoginScreen() {
           {!configured ? <Banner message={configError} /> : null}
           {error ? <Banner message={error} /> : null}
           {notice ? <Banner tone="success" message={notice} /> : null}
+
+          <GoogleButton busy={googleBusy} disabled={!configured} onPress={handleGoogle} />
+
+          <View style={styles.dividerRow}>
+            <View style={styles.divider} />
+            <Text style={styles.dividerText}>or use email</Text>
+            <View style={styles.divider} />
+          </View>
 
           <Field
             label="Email"
