@@ -1,0 +1,149 @@
+# Kora Bakes - Mobile App
+
+Expo + React Native app for the Kora Bakes shop. It is a **second client of the
+existing backend**, not a new product:
+
+- **One auth system.** The same Supabase project as the website, so signing in
+  with the same account gives you the same user id.
+- **One cart.** `GET /api/cart` is the source of truth. The app keeps no local
+  cart that could drift from the website.
+- **One catalogue.** Products come from `/api/products` on the live API.
+
+No second cart, no second database, no new login system.
+
+## Requirements
+
+- Node.js 22.13+ (SDK 57 needs it)
+- Expo Go on your Android phone, from the Play Store
+- The phone and this PC on the same Wi-Fi network
+
+## Setup
+
+```bash
+cd mobile
+npm install
+```
+
+Create `mobile/.env` (copy `.env.example`):
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=https://kora-bakes.onrender.com
+EXPO_PUBLIC_SUPABASE_URL=https://wkxxspiqkdnrnwahrkyl.supabase.co
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+```
+
+Only publishable values belong in this file. `EXPO_PUBLIC_*` values are compiled
+into the app bundle, so never put the Supabase service-role key, the database
+password, the Paystack secret or the Mailgun key here.
+
+## Run
+
+```bash
+npm start          # then scan the QR code with Expo Go
+npm run android    # Android emulator / USB device
+npm run typecheck  # tsc --noEmit
+```
+
+**For a physical phone, `EXPO_PUBLIC_API_BASE_URL` must be the deployed URL
+(`https://kora-bakes.onrender.com`), never `localhost`.** A phone cannot reach
+your PC's `localhost`.
+
+## Signing in
+
+The login screen supports email + password against the existing Supabase
+project, and the session is persisted on the device so you stay signed in
+between launches.
+
+> **Important:** the website signs in with **Google only**. If the account you
+> use on the website was created with Google, it has **no password**, so email
+> sign-in will not work for it yet.
+>
+> To use one account on both surfaces, either:
+> 1. Sign in with Google on the website, then in Supabase Dashboard ->
+>    Authentication -> Users -> set a password for that user, then sign in on
+>    mobile with that email and password. **Same user id, same cart.**
+> 2. Or create a password account in the app ("Create one") and use that account
+>    consistently for the acceptance test on both surfaces.
+
+## How the shared cart works
+
+Every authenticated request sends the Supabase access token:
+
+```
+Authorization: Bearer <supabase access token>
+```
+
+The backend verifies the token and derives the user itself. The app never sends
+a `user_id` as the source of truth.
+
+| Action        | Request                                              |
+| ------------- | ---------------------------------------------------- |
+| Load cart     | `GET /api/cart`                                      |
+| Add / set qty | `PUT /api/cart/items/{product_id}` `{quantity}`      |
+| Remove        | `DELETE /api/cart/items/{product_id}`                |
+| Clear         | `DELETE /api/cart`                                   |
+
+Each mutation returns the whole recalculated cart, and the app renders that
+response directly. Quantities and totals are always computed by the server.
+The cart also re-fetches when the app returns to the foreground.
+
+## Project layout
+
+```
+src/
+  app/                      # Expo Router routes
+    _layout.tsx             # providers + auth gate
+    login.tsx               # sign in / sign up
+    (shop)/                 # signed-in tabs
+      _layout.tsx           # tab bar + live cart badge
+      index.tsx             # product list
+      cart.tsx              # server cart
+      account.tsx           # profile + sign out
+    product/[id].tsx        # product detail
+  components/               # ProductCard, CartRow, Button, Feedback, BrandMark
+  lib/
+    api.ts                  # typed client for the existing API
+    supabase.ts             # Supabase client + session persistence
+    theme.ts                # colours, spacing, money formatting
+  providers/
+    AuthProvider.tsx        # session state
+    CartProvider.tsx        # server cart state
+scripts/smoke.ts            # live smoke test
+```
+
+## Verifying it works
+
+Check the build and types:
+
+```bash
+npm run typecheck
+npx expo export --platform android   # must complete without errors
+```
+
+Live smoke test against the real API (reads credentials from the environment,
+writes nothing to disk, and restores your cart afterwards):
+
+```powershell
+$env:EXPO_PUBLIC_API_BASE_URL='https://kora-bakes.onrender.com'
+$env:EXPO_PUBLIC_SUPABASE_URL='https://wkxxspiqkdnrnwahrkyl.supabase.co'
+$env:EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY='sb_publishable_...'
+$env:SMOKE_EMAIL='you@example.com'
+$env:SMOKE_PASSWORD='your-password'
+node --experimental-strip-types scripts/smoke.ts
+```
+
+## Troubleshooting
+
+**"Unable to resolve module react-native-worklets"** - that package is a peer
+dependency of `react-native-reanimated`. Install it with
+`npx expo install react-native-worklets`.
+
+**"Could not reach the bakery"** - check `EXPO_PUBLIC_API_BASE_URL` is the
+deployed host and the phone has internet. Restart the app after editing `.env`;
+Expo caches env vars at bundle time.
+
+**Products load but the basket is empty** - that is expected if you have not
+added anything. Add an item on the website, then reopen the app tab; it
+re-fetches on foreground.
+
+**Sign-in says the account does not exist** - see the Google note above.

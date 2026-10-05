@@ -8,11 +8,40 @@ Read [PRD.md](PRD.md) for scope and [AGENTS.md](AGENTS.md) for coding and valida
 
 - React + Vite
 - FastAPI
-- Supabase Auth (Google OAuth) and Supabase Postgres
+- Expo + React Native mobile app (`mobile/`, Expo Router)
+- Supabase Auth (Google OAuth on web, email/password on mobile) and Supabase Postgres
 - Paystack hosted checkout (TEST mode)
 - Mailgun API for confirmation emails
 - Supabase Realtime for authenticated cross-device carts
 - Render Free web service for the demo deployment
+
+## Mobile app
+
+`mobile/` is an Expo (SDK 57) app that is a **second client of this same
+backend** - not a separate product. It reuses the existing Supabase project and
+the existing server-side cart, so the website and the phone always show the same
+basket for the same account.
+
+It does **not** introduce a second cart, a second database or a second auth
+system, and it does not collect payment-card details. Checkout stays on the
+web flow, which already uses Paystack.
+
+Every authenticated request sends the Supabase access token as
+`Authorization: Bearer <token>`; the backend derives the user from that token and
+the app never sends a `user_id` as the source of truth.
+
+```bash
+cd mobile
+npm install
+# copy .env.example to .env and set the three EXPO_PUBLIC_* values
+npm start            # scan the QR code with Expo Go
+```
+
+For a physical phone, `EXPO_PUBLIC_API_BASE_URL` must be the deployed host
+(`https://kora-bakes.onrender.com`), never `localhost`.
+
+See [`mobile/README.md`](mobile/README.md) for the full setup, the shared-cart
+contract, and the note about Google-created accounts having no password.
 
 ## Brand assets
 

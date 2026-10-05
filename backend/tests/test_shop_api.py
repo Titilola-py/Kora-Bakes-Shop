@@ -418,6 +418,62 @@ def test_replace_cart_rejects_duplicate_and_unknown_products(client):
     assert unknown.status_code == 422
 
 
+def test_mobile_cart_contract_matches_client_expectations(client):
+    """The mobile app (mobile/src/lib/api.ts) reads CartOut and mutates lines.
+
+    This pins the exact response shape the React Native client depends on, so a
+    backend change cannot silently break the shared website/mobile cart.
+    """
+    empty = client.get("/api/cart")
+    assert empty.status_code == 200
+    assert empty.json() == {"items": [], "item_count": 0, "subtotal_kobo": 0}
+
+    added = client.put("/api/cart/items/croissant-box", json={"quantity": 2})
+    assert added.status_code == 200
+    payload = added.json()
+
+    assert set(payload) == {"items", "item_count", "subtotal_kobo"}
+    assert payload["item_count"] == 2
+    assert payload["subtotal_kobo"] == 1_300_000
+
+    line = payload["items"][0]
+    assert set(line) == {"product_id", "quantity", "product", "line_total_kobo"}
+    assert line["product_id"] == "croissant-box"
+    assert line["quantity"] == 2
+    assert line["line_total_kobo"] == 1_300_000
+
+    # The client renders these product fields directly on the detail screen.
+    product = line["product"]
+    assert set(product) == {
+        "id", "name", "description", "category", "price_kobo", "unit", "image_url", "badge",
+    }
+    assert product["price_kobo"] == 650_000
+    assert isinstance(product["price_kobo"], int)
+
+    # Removing the line returns the empty shape the client renders as "no items".
+    removed = client.delete("/api/cart/items/croissant-box")
+    assert removed.status_code == 200
+    assert removed.json() == {"items": [], "item_count": 0, "subtotal_kobo": 0}
+
+
+def test_mobile_cart_is_isolated_between_accounts(client, current_user):
+    """The HNG acceptance test depends on the cart being per-account, not shared globally."""
+    client.put("/api/cart/items/cinnamon-rolls", json={"quantity": 1})
+
+    current_user["user"] = CurrentUser(
+        id="22222222-2222-4222-8222-222222222222", email="tola@example.com", display_name="Tola"
+    )
+    assert client.get("/api/cart").json()["items"] == []
+
+    # Signing back in as the first account restores exactly what was left there.
+    current_user["user"] = CurrentUser(
+        id="11111111-1111-4111-8111-111111111111", email="mina@example.com", display_name="Mina Ade"
+    )
+    restored = client.get("/api/cart").json()
+    assert restored["item_count"] == 1
+    assert restored["items"][0]["product_id"] == "cinnamon-rolls"
+
+
 def test_expired_supabase_token_is_rejected(monkeypatch):
     class UnauthorizedResponse:
         status_code = 401
