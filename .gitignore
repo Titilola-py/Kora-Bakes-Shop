@@ -11,3 +11,7 @@ dist/
 !.env.example
 .pytest_cache/
 *.log
+
+# Stray artifact: `npm`/`npx` run at the repo root (which has no package.json)
+# drops an empty lockfile here. Root is not a JS package.
+/package-lock.json

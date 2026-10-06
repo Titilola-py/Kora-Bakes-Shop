@@ -103,7 +103,22 @@ npx eas-cli build -p android --profile development
 # install the APK, then start Metro and open the dev build on the phone
 ```
 
-`npx expo run:android` also works but needs the Android SDK installed locally,
+### ⚠️ Windows path note
+
+This project lives in `Crumb & Bloom` — the `&` breaks npm's generated `.bin`
+shims on Windows, so **`npx expo <command>` fails** with
+`'Bloom\mobile\node_modules\.bin\' is not recognized...`. Use the Expo CLI
+directly instead:
+
+```bash
+node ./node_modules/expo/bin/cli <command>   # instead of `npx expo <command>`
+# e.g.  node ./node_modules/expo/bin/cli config --type public
+```
+
+`npm start`, `npm run typecheck` and **`npx eas-cli`** are unaffected and work
+as written (eas-cli runs from npm's cache, not from `.bin`).
+
+`node ./node_modules/expo/bin/cli run:android` also works but needs the Android SDK installed locally,
 which is a considerably larger setup.
 
 ## How the shared cart works
